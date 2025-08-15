@@ -1,0 +1,22 @@
+version: '3.3'
+
+services:
+  fastapi-app:
+    build: .  # Соберём из Dockerfile
+    container_name: fastapi-vpn-ui
+    ports:
+      - "8000:8000"  # Веб-интерфейс
+    volumes:
+      - /var/log/openvpn:/var/log/openvpn:ro # Логи с клиентами
+      - /etc/openvpn:/etc/openvpn:rw # OpenVPN
+      - ./users.json:/app/users.json
+      - /usr/local/bin/openvpn-addclient:/usr/local/bin/openvpn-addclient:ro
+      - /usr/local/bin/openvpn-revoke:/usr/local/bin/openvpn-revoke:ro
+    environment:
+      - ZABBIX_SERVER=your-zabbix-server-ip:10051  # IP/порт Zabbix
+      - ZABBIX_HOSTNAME=vpn-server  # Имя хоста в Zabbix
+    restart: always
+
+networks:
+  default:
+    driver: bridge
