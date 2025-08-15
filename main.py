@@ -1,11 +1,22 @@
+from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Request, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from db import exist_db, init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections
 import subprocess
 import os
 import json
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # код при старте
+    if not await exist_db():
+        await init_db()
+    yield
+    # код при завершении (если нужно закрыть ресурсы)
+app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -169,19 +180,6 @@ def send_to_zabbix(metrics):
     except Exception as e:
         print(f"Error sending to Zabbix: {e}")
 
-# Дашборд
-@app.get("/")
-async def dashboard(request: Request):
-    status = parse_openvpn_status()
-    all_users = get_all_users()
-    metrics = {"vpn.connected_clients": status["clients"]}
-    send_to_zabbix(metrics)
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "status": status,
-        "all_users": all_users
-    })
-
 # Добавление пользователя
 @app.post("/add_user")
 async def add_user(username: str = Form(...), email: str = Form(""), description: str = Form("")):
@@ -206,3 +204,49 @@ async def revoke_user(username: str = Form(...)):
         return {"error": f"Command failed with exit code {e.returncode}: {e.stderr}"}
     except Exception as e:
         return {"error": str(e)}
+
+# Дашбоард
+@app.get("/")
+async def dashboard(request: Request):
+    status = parse_openvpn_status()
+    all_users = get_all_users()
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # обновляем БД
+    for client in status["stats"]:
+        # обновляем трафик активных
+        await update_connection_traffic(client["common_name"], client["bytes_received"], client["bytes_sent"])
+
+        # если подключения ещё нет в базе — добавляем
+        connections = await get_all_connections()
+        if not any(c["common_name"] == client["common_name"] and c["disconnected_at"] is None for c in connections):
+            await add_connection(client["common_name"], client["connected_since"])
+
+    # проверяем, кто отключился
+    active_users = {c["common_name"] for c in status["stats"]}
+    connections = await get_all_connections()
+    for c in connections:
+        if c["disconnected_at"] is None and c["common_name"] not in active_users:
+            connected_at = datetime.datetime.strptime(c["connected_at"], "%Y-%m-%d %H:%M:%S")
+            disconnected_at = now
+            duration_minutes = int((datetime.datetime.now() - connected_at).total_seconds() // 60)
+            await update_connection_disconnect(
+                c["common_name"],
+                disconnected_at,
+                duration_minutes,
+                c["bytes_received"],
+                c["bytes_sent"]
+            )
+
+    connections = await get_all_connections()
+
+    metrics = {"vpn.connected_clients": status["clients"]}
+    send_to_zabbix(metrics)
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "status": status,
+        "all_users": all_users,
+        "connections": connections
+    })
