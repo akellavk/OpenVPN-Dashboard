@@ -228,9 +228,9 @@ async def dashboard(request: Request):
     connections = await get_all_connections()
     for c in connections:
         if c["disconnected_at"] is None and c["common_name"] not in active_users:
-            connected_at = datetime.datetime.strptime(c["connected_at"], "%Y-%m-%d %H:%M:%S")
+            connected_at = datetime.strptime(c["connected_at"], "%Y-%m-%d %H:%M:%S")
             disconnected_at = now
-            duration_minutes = int((datetime.datetime.now() - connected_at).total_seconds() // 60)
+            duration_minutes = int((datetime.now() - connected_at).total_seconds() // 60)
             await update_connection_disconnect(
                 c["common_name"],
                 disconnected_at,
