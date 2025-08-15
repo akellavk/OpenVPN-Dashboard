@@ -18,7 +18,6 @@ services:
       - ZABBIX_HOSTNAME=vpn-server
       - EASYRSA_TEMP_DIR=/tmp/easy-rsa
       - EASYRSA_PKI=/etc/openvpn/easy-rsa/pki
-    user: "${UID}:${GID}"
     restart: always
 
 networks:
