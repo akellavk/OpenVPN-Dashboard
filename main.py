@@ -1,7 +1,12 @@
+from starlette import status as statushttp
+
+from auth import (create_access_token, get_current_active_user,
+                  verify_password, get_password_hash, oauth2_scheme, Token, User, get_current_user)
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.responses import RedirectResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from db import init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections, add_user_db, remove_user_db, get_all_users_from_db
@@ -24,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 #Token Scheme
 sysadmin_scheme = OAuth2PasswordBearer(tokenUrl="Akellavk")
+
+# Хардкод для демонстрации (в реальном приложении используйте БД)
+fake_users_db = {
+    "admin": {
+        "username": "admin",
+        "hashed_password": get_password_hash("admin"),  # Пароль "admin" в реальном приложении замените
+        "disabled": False,
+    }
+}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -235,7 +249,10 @@ async def send_to_zabbix(metrics):
         logger.error(f"Error sending to Zabbix: {e}")
 
 @app.get("/")
-async def dashboard(request: Request):
+async def dashboard(request: Request, current_user: User = Depends(get_current_user)):
+    if not current_user:
+        return RedirectResponse(url="/login")
+
     status = await parse_openvpn_status()
     all_users = await get_all_users()
     connections = await get_all_connections()
@@ -249,7 +266,7 @@ async def dashboard(request: Request):
     })
 
 @app.post("/add_user")
-async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(...), email: str = Form(""), description: str = Form("")):
+async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(...), email: str = Form(""), description: str = Form(""), current_user: User = Depends(get_current_active_user)):
     try:
         if not token:
             raise HTTPException(status_code=400, detail="Token is required")
@@ -277,7 +294,7 @@ async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(.
         return {"error": str(e)}
 
 @app.post("/revoke_user")
-async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form(...)):
+async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form(...), current_user: User = Depends(get_current_active_user)):
     try:
         if not token:
             raise HTTPException(status_code=400, detail="Token is required")
@@ -293,3 +310,40 @@ async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form
     except Exception as e:
         logger.error(f"Revoke user error: {e}")
         return {"error": str(e)}
+
+
+@app.post("/token")
+async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    # Проверка учетных данных
+    if form_data.username != "admin" or not verify_password(form_data.password, get_password_hash("admin")):
+        raise HTTPException(
+            status_code=statushttp.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+
+    access_token_expires = timedelta(minutes=30)
+    access_token = create_access_token(
+        data={"sub": form_data.username},
+        expires_delta=access_token_expires
+    )
+
+    response = RedirectResponse(url="/", status_code=statushttp.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=1800,  # 30 минут
+        secure=False,  # Для HTTPS установить True
+    )
+    return response
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/login", status_code=statushttp.HTTP_303_SEE_OTHER)
+    response.delete_cookie("access_token")
+    return response
