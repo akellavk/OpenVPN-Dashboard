@@ -1,8 +1,36 @@
+import os
+
 import aiosqlite
 import logging
 
+from security import get_password_hash
+
 DB_PATH = "/app/db/connections.db"
 logger = logging.getLogger(__name__)
+
+
+async def init_admin_user():
+    try:
+        admin_username = os.environ.get("ADMIN_USERNAME")
+        admin_password = get_password_hash(os.environ.get("ADMIN_PASSWORD"))
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Проверяем, существует ли администратор
+            cursor = await db.execute(
+                "SELECT username FROM sysadmin WHERE username = ?",
+                (admin_username,)
+            )
+            existing_admin = await cursor.fetchone()
+
+            if not existing_admin:
+                await db.execute(
+                    "INSERT INTO sysadmin (username, password, disabled) VALUES (?, ?, ?)",
+                    (admin_username, admin_password, False)
+                )
+                await db.commit()
+                logger.info("Default admin user created")
+    except Exception as e:
+        logger.error(f"Error initializing admin user: {e}")
 
 async def init_db():
     try:
@@ -26,6 +54,13 @@ async def init_db():
                     description TEXT
                 )
             ''')
+            await db.execute('''
+                 CREATE TABLE IF NOT EXISTS sysadmin (
+                     username TEXT PRIMARY KEY,
+                     password TEXT,
+                     disabled BOOLEAN NOT NULL DEFAULT FALSE
+                 )
+             ''')
             await db.commit()
             logger.info(f"Database initialized at {DB_PATH}")
     except Exception as e:
@@ -117,3 +152,19 @@ async def get_all_users_from_db():
     except Exception as e:
         logger.error(f"Error fetching users: {e}")
         return []
+
+async def get_credentials_from_db(username: str):
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT username, password, disabled FROM sysadmin WHERE username = ?",
+                (username,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+    except Exception as e:
+        logger.error(f"Error fetching credentials: {e}")
+        return None

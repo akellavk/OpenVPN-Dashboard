@@ -1,7 +1,6 @@
 from starlette import status as statushttp
-
-from auth import (create_access_token, get_current_active_user,
-                  verify_password, get_password_hash, oauth2_scheme, Token, User, get_current_user)
+from auth import create_access_token, get_current_active_user, User, get_current_user
+from security import verify_password
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
@@ -9,7 +8,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from db import init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections, add_user_db, remove_user_db, get_all_users_from_db
+from db import init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections, \
+    add_user_db, remove_user_db, get_all_users_from_db, get_credentials_from_db
 import subprocess
 import os
 import asyncio
@@ -29,15 +29,6 @@ logger = logging.getLogger(__name__)
 
 #Token Scheme
 sysadmin_scheme = OAuth2PasswordBearer(tokenUrl="Akellavk")
-
-# Хардкод для демонстрации (в реальном приложении используйте БД)
-fake_users_db = {
-    "admin": {
-        "username": "admin",
-        "hashed_password": get_password_hash("admin"),  # Пароль "admin" в реальном приложении замените
-        "disabled": False,
-    }
-}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -268,6 +259,8 @@ async def dashboard(request: Request, current_user: User = Depends(get_current_u
 @app.post("/add_user")
 async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(...), email: str = Form(""), description: str = Form(""), current_user: User = Depends(get_current_active_user)):
     try:
+        if not current_user:
+            return RedirectResponse(url="/login", status_code=statushttp.HTTP_303_SEE_OTHER)
         if not token:
             raise HTTPException(status_code=400, detail="Token is required")
         if token != os.environ.get("AKELLAVK_TKN"):
@@ -296,6 +289,8 @@ async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(.
 @app.post("/revoke_user")
 async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form(...), current_user: User = Depends(get_current_active_user)):
     try:
+        if not current_user:
+            return RedirectResponse(url="/login", status_code=statushttp.HTTP_303_SEE_OTHER)
         if not token:
             raise HTTPException(status_code=400, detail="Token is required")
         if token != os.environ.get("AKELLAVK_TKN"):
@@ -313,9 +308,17 @@ async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form
 
 
 @app.post("/token")
-async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    # Проверка учетных данных
-    if form_data.username != "admin" or not verify_password(form_data.password, get_password_hash("admin")):
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    # Получаем данные пользователя из БД
+    user_data = await get_credentials_from_db(form_data.username)
+    if not user_data:
+        raise HTTPException(
+            status_code=statushttp.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+
+    # Проверяем пароль и статус пользователя
+    if not verify_password(form_data.password, user_data["password"]) or user_data["disabled"]:
         raise HTTPException(
             status_code=statushttp.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",

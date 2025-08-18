@@ -7,6 +7,8 @@ from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
+from db import get_credentials_from_db
+
 # Конфигурация
 SECRET_KEY = os.environ.get("AKELLAVK_TKN", "supermario")
 ALGORITHM = "HS256"
@@ -37,15 +39,6 @@ class UserInDB(User):
     hashed_password: str
 
 
-# Функции для работы с паролями
-def verify_password(plain_password: str, hashed_password: str):
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str):
-    return pwd_context.hash(password)
-
-
 # Функции для работы с JWT
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -57,15 +50,17 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+# Dependency для извлечения токена из cookie
+async def get_token(request: Request):
+    return request.cookies.get("access_token")
 
-async def get_current_user(request: Request):
+async def get_current_user(token: Optional[str] = Depends(get_token)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        token = request.cookies.get("access_token")
         if token is None:
             return None
 
@@ -73,6 +68,12 @@ async def get_current_user(request: Request):
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
+
+        # Проверяем существование пользователя в БД
+        user_data = await get_credentials_from_db(username)
+        if not user_data:
+            return None
+
         return User(username=username)
     except JWTError:
         return None

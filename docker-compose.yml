@@ -19,8 +19,6 @@ services:
       - EASYRSA_TEMP_DIR=/tmp/easy-rsa
       - EASYRSA_PKI=/etc/openvpn/easy-rsa/pki
       - AKELLAVK_TKN=supermario
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD_HASH=admin
     restart: always
 
 networks:
