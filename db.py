@@ -72,25 +72,34 @@ async def get_all_connections():
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM connections") as cursor:
+            async with db.execute("SELECT * FROM connections ORDER BY last_updated DESC") as cursor:
                 return [dict(row) for row in await cursor.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching connections: {e}")
         return []
 
-async def add_user(common_name, email, description):
+async def add_user_db(common_name, email, description):
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            # Проверяем, существует ли пользователь
+            cursor = await db.execute("SELECT common_name FROM users WHERE common_name = ?", (common_name,))
+            existing_user = await cursor.fetchone()
+
+            if existing_user:
+                logger.warning(f"User {common_name} already exists in the database, updating...")
+
+            # Вставляем или заменяем пользователя
             await db.execute(
                 "INSERT OR REPLACE INTO users (common_name, email, description) VALUES (?, ?, ?)",
                 (common_name, email, description)
             )
             await db.commit()
-            logger.info(f"Added user {common_name}")
+            logger.info(f"Added/Updated user {common_name} in database")
     except Exception as e:
-        logger.error(f"Error adding user {common_name}: {e}")
+        logger.error(f"Error adding/updating user {common_name}: {e}")
+        raise
 
-async def remove_user(common_name):
+async def remove_user_db(common_name):
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM users WHERE common_name = ?", (common_name,))

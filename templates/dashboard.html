@@ -202,13 +202,14 @@
         const form = event.target;
         const formData = new FormData(form);
 
-        const response = await fetch(url, { method: "POST", body: formData });
+        const response = await fetch(url, { method: "POST", headers: {
+                'Authorization': 'Bearer supermario' },  body: formData });
         const result = await response.json();
 
         if (result.message) {
             showAlert(result.message, "success");
             form.reset();
-            setTimeout(() => location.reload(), 1000);
+            setTimeout(() => location.reload(), 8000);
         } else {
             showAlert(result.error || "Ошибка выполнения", "danger");
         }

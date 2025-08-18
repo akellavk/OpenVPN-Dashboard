@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, HTTPException, Depends
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from db import init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections, add_user, remove_user, get_all_users_from_db
+from db import init_db, add_connection, update_connection_disconnect, update_connection_traffic, get_all_connections, add_user_db, remove_user_db, get_all_users_from_db
 import subprocess
 import os
 import asyncio
@@ -11,8 +12,18 @@ import re
 import logging
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+LOG_PATH = "/app/log/server.log"
+print("Log dir: {}".format(os.path.dirname(LOG_PATH)))
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+file_log = logging.FileHandler(LOG_PATH, encoding='utf-8')
+console_out = logging.StreamHandler()
+logging.basicConfig(handlers=(file_log, console_out), level=logging.INFO,
+                    format='%(asctime)s - [%(levelname)s] [M: %(module)s] [Fun: %(funcName)s] - %(message)s',
+                    datefmt='%d.%m.%Y %H:%M:%S')
 logger = logging.getLogger(__name__)
+
+#Token Scheme
+sysadmin_scheme = OAuth2PasswordBearer(tokenUrl="Akellavk")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -238,11 +249,24 @@ async def dashboard(request: Request):
     })
 
 @app.post("/add_user")
-async def add_user(username: str = Form(...), email: str = Form(""), description: str = Form("")):
+async def add_user(token: str = Depends(sysadmin_scheme), username: str = Form(...), email: str = Form(""), description: str = Form("")):
     try:
+        if not token:
+            raise HTTPException(status_code=400, detail="Token is required")
+        if token != os.environ.get("AKELLAVK_TKN"):
+            raise HTTPException(status_code=403, detail="Invalid bearer token")
+        # Проверяем, существует ли файл .ovpn
+        ovpn_file = f"/etc/openvpn/easy-rsa/keys/{username}.ovpn"
+        if os.path.exists(ovpn_file):
+            logger.error(f"User {username} already exists (OVPN file found)")
+            raise HTTPException(status_code=400, detail=f"Пользователь {username} уже существует")
+        else:
+            logger.info(f"Пользователя не существует, добавляю {username}")
+
+        # Выполняем команду openvpn-addclient
         cmd = ["/usr/local/bin/openvpn-addclient", username, email]
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        await add_user(username, email, description)
+        await add_user_db(username, email, description)
         logger.info(f"User {username} added successfully")
         return {"message": f"Пользователь {username} добавлен успешно"}
     except subprocess.CalledProcessError as e:
@@ -253,10 +277,14 @@ async def add_user(username: str = Form(...), email: str = Form(""), description
         return {"error": str(e)}
 
 @app.post("/revoke_user")
-async def revoke_user(username: str = Form(...)):
+async def revoke_user(token: str = Depends(sysadmin_scheme),username: str = Form(...)):
     try:
+        if not token:
+            raise HTTPException(status_code=400, detail="Token is required")
+        if token != os.environ.get("AKELLAVK_TKN"):
+            raise HTTPException(status_code=403, detail="Invalid bearer token")
         subprocess.run(["/usr/local/bin/openvpn-revoke", username], input="yes\n", text=True, check=True, capture_output=True)
-        await remove_user(username)
+        await remove_user_db(username)
         logger.info(f"User {username} revoked successfully")
         return {"message": f"Пользователь {username} удален успешно"}
     except subprocess.CalledProcessError as e:
